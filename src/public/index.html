@@ -1,0 +1,115 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Live Location Sharing</title>
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <style>
+        #map { 
+            height: 80vh;
+            width: 100%;
+        }
+        .controls {
+            margin: 20px;
+            text-align: center;
+        }
+    </style>
+</head>
+<body>
+    <div class="controls">
+        <button id="shareLocation">Share My Location</button>
+        <button id="stopSharing">Stop Sharing</button>
+    </div>
+    <div id="map"></div>
+
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    <script src="/socket.io/socket.io.js"></script>
+    <script>
+        const socket = io();
+        let map;
+        let myLocationMarker;
+        let otherMarkers = new Map();
+        let watchId = null;
+
+        // Initialize map
+        map = L.map('map').setView([0, 0], 2);
+        L.tileLayer('https://{s}.tile.openstreetmap.org/{z}/{x}/{y}.png', {
+            attribution: '© OpenStreetMap contributors'
+        }).addTo(map);
+
+        // Handle share location button
+        document.getElementById('shareLocation').addEventListener('click', () => {
+            if ("geolocation" in navigator) {
+                watchId = navigator.geolocation.watchPosition(
+                    position => {
+                        const location = {
+                            lat: position.coords.latitude,
+                            lng: position.coords.longitude
+                        };
+                        
+                        // Update my marker
+                        if (!myLocationMarker) {
+                            myLocationMarker = L.marker([location.lat, location.lng])
+                                .bindPopup('You are here')
+                                .addTo(map);
+                            map.setView([location.lat, location.lng], 15);
+                        } else {
+                            myLocationMarker.setLatLng([location.lat, location.lng]);
+                        }
+
+                        // Emit location update
+                        socket.emit('updateLocation', location);
+                    },
+                    error => console.error('Error getting location:', error),
+                    { enableHighAccuracy: true }
+                );
+            }
+        });
+
+        // Handle stop sharing button
+        document.getElementById('stopSharing').addEventListener('click', () => {
+            if (watchId) {
+                navigator.geolocation.clearWatch(watchId);
+                watchId = null;
+            }
+            if (myLocationMarker) {
+                map.removeLayer(myLocationMarker);
+                myLocationMarker = null;
+            }
+        });
+
+        // Socket event handlers
+        socket.on('users', users => {
+            users.forEach(user => {
+                if (user.location && user.id !== socket.id) {
+                    const marker = L.marker([user.location.lat, user.location.lng])
+                        .bindPopup('User: ' + user.id)
+                        .addTo(map);
+                    otherMarkers.set(user.id, marker);
+                }
+            });
+        });
+
+        socket.on('locationUpdated', ({ id, location }) => {
+            let marker = otherMarkers.get(id);
+            if (!marker) {
+                marker = L.marker([location.lat, location.lng])
+                    .bindPopup('User: ' + id)
+                    .addTo(map);
+                otherMarkers.set(id, marker);
+            } else {
+                marker.setLatLng([location.lat, location.lng]);
+            }
+        });
+
+        socket.on('userLeft', userId => {
+            const marker = otherMarkers.get(userId);
+            if (marker) {
+                map.removeLayer(marker);
+                otherMarkers.delete(userId);
+            }
+        });
+    </script>
+</body>
+</html>
